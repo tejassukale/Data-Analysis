@@ -1,0 +1,110 @@
+import requests
+import os
+from selenium import webdriver
+import json
+import pandas as pd
+import xlwings as xw
+import time
+
+def get_session_cookies():
+    driver = webdriver.Chrome(executable_path="chromedriver.exe")
+    driver.get("https://www.nseindia.com")
+    cookies = driver.get_cookies()
+    #print(cookies)
+    cookie_dict = {}
+    with open('cookie', 'w') as f :
+        for cookie in cookies:
+            cookie_dict[cookie["name"]] = cookie["value"]
+        f.write(json.dumps(cookie_dict))
+    #print(cookie_dict)
+    driver.quit()
+    return cookie_dict
+expiry = "28-Apr-2022"
+at_the_money = "17500"
+fut_url = "https://www.nseindia.com/api/liveEquity-derivatives?index=nse50_fut"
+def fetch_oi_data(data_name):
+    data = data_name
+    if data == "option":
+        url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
+    elif data == "futures":
+        url = "https://www.nseindia.com/api/liveEquity-derivatives?index=nse50_fut"
+    else:
+        print("invalid url")
+
+    headers = {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.88 Safari/537.36',
+               "accept-language": "en-GB,en-US;q=0.9,en;q=0.8,mr;q=0.7", "accept-encoding": "gzip, deflate, br" }
+
+    try:
+        print("reading from cookie file")
+        cookie_dict = json.loads(open("cookie").read())
+    except Exception as e:
+        print("error reading cookies")
+        print("Generating cookie file")
+        cookie_dict = get_session_cookies()
+
+    session = requests.session()
+
+    for cookie in cookie_dict:
+        if 'bm_sv' in cookie or 'nseappid' in cookie or 'nsit' in cookie:
+            session.cookies.set(cookie, cookie_dict[cookie])
+
+    r = session.get(url, headers = headers, timeout = 25).json()
+    return r
+    #with open ('oidata.json', 'w') as o:
+        # o.write(json.dumps(r, indent=2, sort_keys=True))
+
+
+
+def fetch_oc_data_single_ce(strikePrice, excelsheet) :
+    global expiry
+    roll = 2  #+1 beacuse added header manually
+    total_roll = 126  #+1 beacuse added header manually
+    str(strikePrice)
+    str(excelsheet)
+    '''excel detail '''
+    excel_file = "MoneyFlow.xlsx"
+    wb = xw.Book(excel_file)
+    ce_strikePrice_1 = wb.sheets(excelsheet)
+    while True:
+        r = fetch_oi_data("option")
+
+        if roll<= total_roll:
+
+            if expiry :
+                ce_values = [data["CE"] for data in r['records']['data'] if str(data['strikePrice']) == strikePrice and str(data['expiryDate']) == expiry]
+
+            else:
+                ce_values = [data["CE"] for data in r['filtered']['data'] if str(data['strikePrice'])== strikePrice]
+
+            df = pd.DataFrame(ce_values)
+
+            ce_strikePrice_1.range("A" + str(roll)).options(header = False).value = df.drop(['underlying','identifier','pchangeinOpenInterest',
+                                                                               'pChange','totalBuyQuantity','totalSellQuantity',
+                                                                               'bidQty','bidprice','askQty','askPrice'],axis=1)
+            roll+=1
+            time.sleep(180)
+
+
+
+def fetch_fut_data(expiryDate, excelsheet):
+    str(expiryDate)
+    str(excelsheet)
+    roll = 2  # +1 beacuse added header manually
+    total_roll = 126  # +1 beacuse added header manually
+    excel_file = "MoneyFlow.xlsx"
+    wb = xw.Book(excel_file)
+    fut_1 = wb.sheets(excelsheet)
+    while True:
+        r = fetch_oi_data("futures")
+        if roll<= total_roll:
+            #with open('fut_data.json', 'w') as o:
+                #o.write(json.dumps(r, indent=2, sort_keys=True))
+            fut_data = [data for data in r["data"] if str(data["expiryDate"]) == expiryDate]
+            fut_df = pd.DataFrame(fut_data)
+
+            fut_1.range("A"+ str(roll)).options(header = False).value = fut_df.drop(['meta','underlying' ,'instrumentType','instrument',
+                                                                       'identifier','contract','optionType','strikePrice',
+                                                                       'totalTurnover','value','premiumTurnOver'], axis=1)
+
+            roll+=1
+            time.sleep(180)
